@@ -1,197 +1,134 @@
 # FetchV2 MCP Server
 
+[![PyPI version](https://img.shields.io/pypi/v/fetchv2-mcp-server.svg)](https://pypi.org/project/fetchv2-mcp-server/)
 [![CI](https://github.com/praveenc/fetchv2-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/praveenc/fetchv2-mcp-server/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-A robust Model Context Protocol server for fetching and extracting web content using [Trafilatura](https://trafilatura.readthedocs.io/en/latest/). Optimized for AI agents with clean markdown output.
+Model Context Protocol (MCP) server for web content fetching and extraction.
 
-## Why FetchV2?
-
-**Trafilatura is the real star.** Unlike basic HTML-to-markdown converters, Trafilatura is specifically designed for web content extraction:
-
-- Removes boilerplate (navbars, footers, ads, cookie banners)
-- Preserves article structure and tables
-- Extracts metadata (title, author, date) automatically
-- Handles edge cases like minimal-content SPAs
-
-**Graceful robots.txt handling.** Instead of failing hard when robots.txt is unreachable, FetchV2 treats timeout/unavailable as "allowed" - more practical for real-world use.
+This MCP server provides tools to fetch webpages, extract clean content using [Trafilatura](https://trafilatura.readthedocs.io/), and discover links for batch processing.
 
 ## Features
 
-- **Superior Content Extraction**: Uses Trafilatura for high-quality HTML-to-markdown conversion
-- **Robots.txt Compliance**: Respects robots.txt by default, gracefully handles timeouts
+- **Fetch Webpages**: Extract clean markdown content from any URL
+- **Batch Fetching**: Fetch up to 10 URLs in a single request
+- **Link Discovery**: Find and filter links on any webpage
+- **Smart Extraction**: Trafilatura removes boilerplate (navbars, ads, footers)
+- **Robots.txt Compliance**: Respects robots.txt with graceful timeout handling
 - **Pagination Support**: Handle large pages with `start_index` parameter
-- **Multi-URL Fetching**: Fetch up to 10 URLs in a single request
-- **Link Discovery**: Extract and filter links from any webpage
-- **Raw Mode**: Get unprocessed content when needed
-- **Markdown Detection**: Automatically handles `.md` files without extraction
+
+## Prerequisites
+
+1. Install `uv` from [Astral](https://docs.astral.sh/uv/getting-started/installation/)
+2. Install Python 3.10 or newer using `uv python install 3.10`
 
 ## Installation
 
-```bash
-# Clone the repo
-git clone https://github.com/praveenc/fetchv2-mcp-server.git
-cd fetchv2-mcp-server
+| Cursor | VS Code |
+| ------ | ------- |
+| [Install MCP Server](https://cursor.com/install-mcp?name=fetchv2-mcp-server&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJmZXRjaHYyLW1jcC1zZXJ2ZXJAbGF0ZXN0Il0sImVudiI6e30sImRpc2FibGVkIjpmYWxzZSwiYXV0b0FwcHJvdmUiOltdfQ%3D%3D) | [Install on VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=FetchV2%20MCP%20Server&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22fetchv2-mcp-server%40latest%22%5D%2C%22env%22%3A%7B%7D%2C%22disabled%22%3Afalse%2C%22autoApprove%22%3A%5B%5D%7D) |
 
-# Using uv (recommended)
-uv sync
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+Or configure manually in your MCP client:
 
-# Or using pip
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+```json
+{
+  "mcpServers": {
+    "fetchv2": {
+      "command": "uvx",
+      "args": ["fetchv2-mcp-server@latest"],
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
 ```
+
+**Config file locations:**
+
+- **Claude Desktop (macOS)**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Claude Desktop (Windows)**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Windsurf**: `~/.codeium/windsurf/mcp_config.json`
+- **Kiro**: `.kiro/settings/mcp.json` in your project
+
+### Install from PyPI
+
+```bash
+# Using uv
+uv add fetchv2-mcp-server
+
+# Using pip
+pip install fetchv2-mcp-server
+```
+
+## Basic Usage
+
+Example prompts to try:
+
+- "Fetch the documentation from `<URL>`"
+- "Find all links on `<docs URL>` that contain 'tutorial'"
+- "Read these three pages and summarize the differences: `[url1, url2, url3]`"
 
 ## Available Tools
 
-### `fetch`
+### fetch
 
-Fetch a single webpage and extract its main content as clean markdown.
-
-**Use when:** Reading an article, documentation page, or blog post.
-
-Parameters:
-
-- `url` (required): The webpage URL to fetch
-- `max_length` (default: 5000): Maximum characters to return (use 1000-2000 for summaries)
-- `start_index` (default: 0): Character offset for pagination
-- `get_raw_html` (default: false): Skip extraction, return original HTML
-- `include_metadata` (default: true): Include title, author, date at top
-- `include_tables` (default: true): Preserve tables in markdown format
-- `include_links` (default: false): Preserve hyperlinks in output
-- `bypass_robots_txt` (default: false): Skip robots.txt check (user-initiated only)
-
-### `fetch_batch`
-
-Fetch multiple webpages in a single request. **Fewer round trips = faster workflows.**
-
-**Use when:** You have 2-10 URLs to read (e.g., from `discover_links` results).
-
-Parameters:
-
-- `urls` (required): List of URLs (max 10)
-- `max_length_per_url` (default: 2000): Character limit per URL
-- `get_raw_html` (default: false): Skip extraction for all URLs
-
-### `discover_links`
-
-Discover all links on a webpage. **Use before `fetch_batch` to find relevant URLs.**
-
-**Use when:** Exploring a site to find relevant pages before fetching.
-
-Parameters:
-
-- `url` (required): The webpage URL to scan for links
-- `filter_pattern` (optional): Regex to filter links (e.g., `/docs/`, `\.pdf$`)
-
-## Real-World Use Cases
-
-### Discovery → Batch Fetch Workflow
-
-First, discover what pages exist:
+Fetches a webpage and extracts its main content as clean markdown.
 
 ```python
-discover_links(url="https://kiro.dev/docs/", filter_pattern="/docs/")
+fetch(url: str, max_length: int = 5000, start_index: int = 0) -> str
 ```
 
-Tool Output:
+| Parameter | Type | Default | Description |
+| --------- | ---- | ------- | ----------- |
+| `url` | str | required | The webpage URL to fetch |
+| `max_length` | int | 5000 | Maximum characters to return |
+| `start_index` | int | 0 | Character offset for pagination |
+| `get_raw_html` | bool | false | Skip extraction, return raw HTML |
+| `include_metadata` | bool | true | Include title, author, date |
+| `include_tables` | bool | true | Preserve tables in markdown |
+| `include_links` | bool | false | Preserve hyperlinks |
+| `bypass_robots_txt` | bool | false | Skip robots.txt check |
 
-```bash
-# Links from https://kiro.dev/docs/
-Found 11 links
+### fetch_batch
 
-- https://kiro.dev/docs/getting-started/installation/
-- https://kiro.dev/docs/getting-started/first-project/
-- https://kiro.dev/docs/specs/
-- https://kiro.dev/docs/hooks/
-- https://kiro.dev/docs/chat/
-- https://kiro.dev/docs/steering/
-- https://kiro.dev/docs/mcp/
-...
-```
-
-Then fetch multiple pages at once:
+Fetches multiple webpages in a single request.
 
 ```python
-fetch_batch(
-  urls=["https://kiro.dev/docs/specs/", "https://kiro.dev/docs/hooks/", "https://kiro.dev/docs/steering/"],
-  max_length_per_url=1500
-)
+fetch_batch(urls: list[str], max_length_per_url: int = 2000) -> str
 ```
 
-Tool Output:
+| Parameter | Type | Default | Description |
+| --------- | ---- | ------- | ----------- |
+| `urls` | list[str] | required | List of URLs (max 10) |
+| `max_length_per_url` | int | 2000 | Character limit per URL |
+| `get_raw_html` | bool | false | Skip extraction for all URLs |
 
-```markdown
-## https://kiro.dev/docs/specs/
-<!-- Type: markdown (extracted) -->
+### discover_links
 
-Specs or specifications are structured artifacts that formalize the development
-process for complex features in your application...
+Discovers all links on a webpage with optional filtering.
 
----
-
-## https://kiro.dev/docs/hooks/
-<!-- Type: markdown (extracted) -->
-
-Agent hooks are powerful automation tools that streamline your development
-workflow by automatically executing predefined agent actions...
-
----
-
-## https://kiro.dev/docs/steering/
-<!-- Type: markdown (extracted) -->
-
-Steering gives Kiro persistent knowledge about your workspace through markdown
-files. Instead of explaining your conventions in every chat...
+```python
+discover_links(url: str, filter_pattern: str = "") -> str
 ```
 
-### Use Case Examples
+| Parameter | Type | Default | Description |
+| --------- | ---- | ------- | ----------- |
+| `url` | str | required | The webpage URL to scan |
+| `filter_pattern` | str | "" | Regex to filter links (e.g., `/docs/`) |
 
-**discover_links:**
+## Workflow Example
 
-- Docs crawling - Find all pages before scraping
-- Competitive research - Extract blog post links from a site
-- API discovery - Find all API endpoint documentation pages
+**Step 1:** Discover relevant documentation pages
 
-**fetch_batch:**
-
-- Comparison research - Fetch React, Vue, and Svelte docs to compare approaches
-- Onboarding context - Grab multiple docs pages to understand a new tool
-- Multi-source fact-checking - Get the same topic from different sources
-
-**Key value: fewer round trips.** Instead of 10 separate fetch calls (10 tool invocations, 10 approvals in supervised mode), you get everything in 1-2 calls.
-
-## Configuration
-
-### Kiro / VS Code
-
-Add to `.kiro/settings/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "fetchv2": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/fetchv2-mcp-server", "run", "python", "-m", "fetchv2_mcp_server"]
-    }
-  }
-}
+```python
+discover_links(url="https://docs.example.com/", filter_pattern="/guide/")
 ```
 
-### Claude Desktop
+**Step 2:** Batch fetch the pages you need
 
-```json
-{
-  "mcpServers": {
-    "fetchv2": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/fetchv2-mcp-server", "run", "python", "-m", "fetchv2_mcp_server"]
-    }
-  }
-}
+```python
+fetch_batch(urls=["https://docs.example.com/guide/intro", "https://docs.example.com/guide/setup"])
 ```
 
 ## Prompts
@@ -202,32 +139,31 @@ Add to `.kiro/settings/mcp.json`:
 ## Development
 
 ```bash
-# Install dev dependencies
+# Clone and install
+git clone https://github.com/praveenc/fetchv2-mcp-server.git
+cd fetchv2-mcp-server
 uv sync --dev
+source .venv/bin/activate
+
+# Run tests
+uv run pytest
 
 # Run with MCP Inspector
-mcp dev server.py
+mcp dev src/fetchv2_mcp_server/server.py
 
-# Type checking
-uv run pyright
-
-# Linting
+# Linting and type checking
 uv run ruff check .
-```
-
-## Project Structure
-
-```bash
-fetchv2_mcp_server/
-├── pyproject.toml
-├── README.md
-└── src/
-    └── fetchv2_mcp_server/
-        ├── __init__.py
-        ├── __main__.py
-        └── server.py
+uv run pyright
 ```
 
 ## License
 
-MIT
+MIT - see [LICENSE](LICENSE) for details.
+
+## Contributing
+
+Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Support
+
+For issues and questions, use the [GitHub issue tracker](https://github.com/praveenc/fetchv2-mcp-server/issues).
