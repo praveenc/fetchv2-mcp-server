@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-12-04
+
+### Changed
+
+- Improved README with one-click install buttons for Cursor and VS Code
+- Added Prerequisites section
+- Added Basic Usage section with example prompts
+- Converted tool parameters to tables for better readability
+- Added Windows config location for Claude Desktop
+
 ## [1.0.0] - 2025-12-04
 
 ### Added
