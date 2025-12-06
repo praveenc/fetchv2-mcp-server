@@ -9,6 +9,7 @@ content extraction capabilities.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import re
 from copy import deepcopy
@@ -647,6 +648,228 @@ async def discover_links(
         result.append(f"\n<!-- {len(resolved_links) - 100} more links omitted -->")
 
     return "\n".join(result)
+
+
+def parse_llms_txt(txt: str) -> dict:
+    """
+    Parse llms.txt file contents to extract structure and links.
+
+    Args:
+        txt: Raw text content of llms.txt file
+
+    Returns:
+        Dictionary with title, summary, and sections containing links
+    """
+
+    def _chunked(it, chunk_sz: int):
+        it = iter(it)
+        return iter(lambda: list(itertools.islice(it, chunk_sz)), [])
+
+    def _parse_links(links: str) -> list[dict[str, str]]:
+        link_pat = r"-\s*\[(?P<title>[^\]]+)\]\((?P<url>[^\)]+)\)(?::\s*(?P<desc>.*))?"
+        return [
+            m.groupdict()
+            for line in re.split(r"\n+", links.strip())
+            if line.strip() and (m := re.search(link_pat, line))
+        ]
+
+    # Split into header and sections
+    start, *rest = re.split(r"^##\s*(.*?$)", txt, flags=re.MULTILINE)
+
+    # Parse sections
+    sects = {k: _parse_links(v) for k, v in dict(_chunked(rest, 2)).items()}
+
+    # Parse header with optional summary (blockquote)
+    pat_with_summary = (
+        r"^#\s*(?P<title>.+?$)\n+" r"(?:^>\s*(?P<summary>.+?$)\n+)?" r"(?P<info>.*)"
+    )
+    match = re.search(pat_with_summary, start.strip(), re.MULTILINE | re.DOTALL)
+
+    if match:
+        d = match.groupdict()
+        d["summary"] = d.get("summary") or ""
+        d["info"] = (d.get("info") or "").strip()
+    else:
+        # Fallback: just extract title
+        title_match = re.search(r"^#\s*(.+?)$", start.strip(), re.MULTILINE)
+        d = {
+            "title": title_match.group(1) if title_match else "Unknown",
+            "summary": "",
+            "info": "",
+        }
+
+    d["sections"] = sects
+    return d
+
+
+@mcp.tool()
+async def fetch_llms_txt(
+    url: Annotated[
+        str,
+        Field(
+            description="URL to an llms.txt file (e.g., https://example.com/llms.txt)"
+        ),
+    ],
+    include_content: Annotated[
+        bool,
+        Field(
+            description="If true, also fetch content of all linked pages. Default false.",
+            default=False,
+        ),
+    ] = False,
+    max_length_per_url: Annotated[
+        int,
+        Field(
+            description="When include_content=True, max chars per linked page. Default 2000.",
+            default=2000,
+        ),
+    ] = 2000,
+) -> str:
+    """
+    Fetch and parse an llms.txt file to discover LLM-friendly documentation.
+
+    USE THIS TOOL WHEN:
+    - A site provides an llms.txt file for AI-friendly content discovery
+    - You need to understand what documentation is available
+    - You want to fetch structured docs in a single request
+
+    WHAT IS llms.txt:
+    A proposal for sites to provide LLM-friendly content at /llms.txt.
+    It's a markdown file listing documentation links with descriptions.
+    See https://llmstxt.org for the specification.
+
+    WORKFLOW:
+    1. fetch_llms_txt(url="https://example.com/llms.txt") → Get structure
+    2. Review sections and links
+    3. Either use include_content=True or fetch_batch for specific pages
+
+    EXAMPLES:
+    - fetch_llms_txt(url="https://fastht.ml/docs/llms.txt")
+    - fetch_llms_txt(url="https://example.com/llms.txt", include_content=True)
+    """
+    if not url:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="URL is required"))
+
+    user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
+
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        # Fetch the llms.txt file
+        try:
+            response = await client.get(
+                url,
+                follow_redirects=True,
+                headers={"User-Agent": user_agent},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise McpError(
+                ErrorData(
+                    code=INTERNAL_ERROR,
+                    message=f"Failed to fetch llms.txt from {url}: {e!r}",
+                ),
+            )
+
+        # Parse the llms.txt content
+        try:
+            parsed = parse_llms_txt(response.text)
+        except Exception as e:
+            raise McpError(
+                ErrorData(
+                    code=INTERNAL_ERROR,
+                    message=f"Failed to parse llms.txt: {e!r}",
+                ),
+            )
+
+        # Build the response
+        result_parts = [
+            f"# {parsed.get('title', 'llms.txt')}",
+            "",
+        ]
+
+        if parsed.get("summary"):
+            result_parts.append(f"> {parsed['summary']}")
+            result_parts.append("")
+
+        if parsed.get("info"):
+            result_parts.append(parsed["info"])
+            result_parts.append("")
+
+        # Resolve relative URLs to absolute URLs
+        parsed_base = urlparse(url)
+        base_url = f"{parsed_base.scheme}://{parsed_base.netloc}"
+
+        def resolve_url(link_url: str) -> str:
+            """Resolve relative URLs to absolute URLs."""
+            if link_url.startswith(("http://", "https://")):
+                return link_url
+            elif link_url.startswith("//"):
+                return f"{parsed_base.scheme}:{link_url}"
+            elif link_url.startswith("/"):
+                return f"{base_url}{link_url}"
+            else:
+                # Relative path - resolve from the llms.txt directory
+                base_path = parsed_base.path.rsplit("/", 1)[0]
+                return f"{base_url}{base_path}/{link_url}"
+
+        # Collect all URLs for potential content fetching
+        all_urls: list[tuple[str, str, str]] = []  # (url, title, section)
+
+        sections = parsed.get("sections", {})
+        for section_name, links in sections.items():
+            result_parts.append(f"## {section_name}")
+            result_parts.append("")
+            for link in links:
+                title = link.get("title", "")
+                link_url = link.get("url", "")
+                desc = link.get("desc", "")
+
+                if link_url:
+                    # Resolve relative URLs
+                    resolved_url = resolve_url(link_url)
+                    all_urls.append((resolved_url, title, section_name))
+                    desc_str = f": {desc}" if desc else ""
+                    result_parts.append(f"- [{title}]({resolved_url}){desc_str}")
+
+            result_parts.append("")
+
+        result_parts.append(f"---\nFound {len(all_urls)} documentation links.")
+
+        # Optionally fetch all content
+        if include_content and all_urls:
+            result_parts.append("")
+            result_parts.append("# Fetched Content")
+            result_parts.append("")
+
+            for link_url, title, section in all_urls:
+                try:
+                    content, content_type = await fetch_and_extract(
+                        link_url,
+                        user_agent,
+                        raw=False,
+                        include_metadata=False,
+                    )
+                    truncated = content[:max_length_per_url]
+                    if len(content) > max_length_per_url:
+                        omitted = len(content) - max_length_per_url
+                        truncated += f"\n<!-- Truncated: {omitted} chars omitted -->"
+
+                    result_parts.append(f"## {title}")
+                    result_parts.append(
+                        f"<!-- Section: {section} | URL: {link_url} -->"
+                    )
+                    result_parts.append("")
+                    result_parts.append(truncated)
+                    result_parts.append("")
+                    result_parts.append("---")
+                    result_parts.append("")
+                except Exception as e:
+                    result_parts.append(f"## {title}")
+                    result_parts.append(
+                        f"<error>Failed to fetch {link_url}: {e!r}</error>"
+                    )
+                    result_parts.append("")
+
+    return "\n".join(result_parts)
 
 
 # Prompts for user-initiated fetching (bypasses robots.txt)

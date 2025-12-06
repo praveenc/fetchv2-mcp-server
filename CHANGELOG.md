@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-12-05
+
+### Added
+
+- `fetch_llms_txt` tool - Parse and fetch LLM-friendly documentation from llms.txt files
+- Support for the [llms.txt](https://llmstxt.org) specification
+- `include_content` parameter to explicitly fetch all linked pages in one request
+- Automatic resolution of relative URLs to absolute URLs (handles Raycast-style paths)
+
+### Notes
+
+- By default, only the llms.txt index is fetched — linked .md files are NOT downloaded
+- Set `include_content=True` to fetch all linked documentation pages
+
 ## [1.0.1] - 2025-12-04
 
 ### Changed

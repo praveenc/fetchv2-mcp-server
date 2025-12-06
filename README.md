@@ -14,6 +14,7 @@ This MCP server provides tools to fetch webpages, extract clean content using [T
 - **Fetch Webpages**: Extract clean markdown content from any URL
 - **Batch Fetching**: Fetch up to 10 URLs in a single request
 - **Link Discovery**: Find and filter links on any webpage
+- **llms.txt Support**: Parse and fetch LLM-friendly documentation indexes
 - **Smart Extraction**: Trafilatura removes boilerplate (navbars, ads, footers)
 - **Robots.txt Compliance**: Respects robots.txt with graceful timeout handling
 - **Pagination Support**: Handle large pages with `start_index` parameter
@@ -116,6 +117,36 @@ discover_links(url: str, filter_pattern: str = "") -> str
 | --------- | ---- | ------- | ----------- |
 | `url` | str | required | The webpage URL to scan |
 | `filter_pattern` | str | "" | Regex to filter links (e.g., `/docs/`) |
+
+### fetch_llms_txt
+
+Fetch and parse an [llms.txt](https://llmstxt.org) file to discover LLM-friendly documentation.
+
+```python
+fetch_llms_txt(url: str, include_content: bool = False) -> str
+```
+
+| Parameter | Type | Default | Description |
+| --------- | ---- | ------- | ----------- |
+| `url` | str | required | URL to an llms.txt file |
+| `include_content` | bool | false | Also fetch content of all linked pages |
+| `max_length_per_url` | int | 2000 | When include_content=True, max chars per page |
+
+> **⚠️ Important:** By default, only the llms.txt index is fetched — the linked markdown files are **NOT** downloaded to context. Set `include_content=True` to explicitly fetch all linked pages.
+
+**Example:**
+
+```python
+# DEFAULT: Only fetches the index (lightweight, ~1KB)
+fetch_llms_txt(url="https://docs.example.com/llms.txt")
+# Returns: title + list of links with descriptions
+
+# EXPLICIT: Fetches index + all linked .md files (can be large)
+fetch_llms_txt(url="https://docs.example.com/llms.txt", include_content=True)
+# Returns: structure + content of all linked pages
+```
+
+**Note:** Relative URLs (e.g., `/docs/guide.md`) are automatically resolved to absolute URLs.
 
 ## Workflow Example
 

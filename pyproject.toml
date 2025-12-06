@@ -1,6 +1,6 @@
 [project]
 name = "fetchv2-mcp-server"
-version = "1.0.1"
+version = "1.1.0"
 description = "A robust MCP server for fetching and extracting web content using Trafilatura"
 readme = "README.md"
 requires-python = ">=3.10"

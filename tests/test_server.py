@@ -13,8 +13,10 @@ from fetchv2_mcp_server.server import (
     fetch,
     fetch_and_extract,
     fetch_batch,
+    fetch_llms_txt,
     get_robots_txt_url,
     is_markdown_url,
+    parse_llms_txt,
 )
 
 
@@ -325,3 +327,101 @@ class TestDiscoverLinksTool:
             assert "/docs/intro" in result
             assert "/docs/guide" in result
             assert "/blog/" not in result
+
+
+class TestParseLLMSTxt:
+    """Tests for parse_llms_txt helper function."""
+
+    def test_parse_llms_txt_basic(self):
+        """Parse basic llms.txt format with sections and links."""
+        content = (
+            "# My Project\n\n"
+            "## Docs\n\n"
+            "- [Getting Started](https://example.com/start.md): How to begin\n"
+            "- [API Reference](https://example.com/api.md): API docs\n\n"
+            "## Examples\n\n"
+            "- [Demo](https://example.com/demo.md): A demo\n"
+        )
+        result = parse_llms_txt(content)
+
+        assert result["title"] == "My Project"
+        assert "Docs" in result["sections"]
+        assert len(result["sections"]["Docs"]) == 2
+        assert result["sections"]["Docs"][0]["title"] == "Getting Started"
+        assert result["sections"]["Docs"][0]["url"] == "https://example.com/start.md"
+        assert result["sections"]["Docs"][0]["desc"] == "How to begin"
+        assert "Examples" in result["sections"]
+        assert len(result["sections"]["Examples"]) == 1
+
+    def test_parse_llms_txt_no_summary(self):
+        """Parse llms.txt without summary."""
+        content = (
+            "# Project Name\n\n" "## Docs\n\n" "- [Page](https://example.com/page.md)\n"
+        )
+        result = parse_llms_txt(content)
+
+        assert result["title"] == "Project Name"
+        assert result["summary"] == ""
+        assert "Docs" in result["sections"]
+
+
+class TestFetchLLMSTxtTool:
+    """Tests for the fetch_llms_txt tool."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_llms_txt_parses_structure(self):
+        """Fetch llms.txt should parse and return structure."""
+        llms_content = (
+            "# Test Project\n\n"
+            "> Project description\n\n"
+            "## Documentation\n\n"
+            "- [Guide](https://example.com/guide.md): The guide\n"
+            "- [API](https://example.com/api.md): API reference\n"
+        )
+        mock_response = AsyncMock()
+        mock_response.text = llms_content
+        mock_response.raise_for_status = lambda: None
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client
+
+            result = await fetch_llms_txt(url="https://example.com/llms.txt")
+
+            assert "# Test Project" in result
+            assert "Project description" in result
+            assert "## Documentation" in result
+            assert "[Guide](https://example.com/guide.md)" in result
+            assert "Found 2 documentation links" in result
+
+    @pytest.mark.asyncio
+    async def test_fetch_llms_txt_resolves_relative_urls(self):
+        """Fetch llms.txt should resolve relative URLs to absolute URLs."""
+        # Simulating Raycast-style llms.txt with relative paths
+        llms_content = (
+            "# Raycast API\n\n"
+            "## Docs\n\n"
+            "- [Introduction](/readme.md): Start building\n"
+            "- [Getting Started](/basics/getting-started.md): Prerequisites\n"
+        )
+        mock_response = AsyncMock()
+        mock_response.text = llms_content
+        mock_response.raise_for_status = lambda: None
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client
+
+            result = await fetch_llms_txt(url="https://developers.raycast.com/llms.txt")
+
+            # Relative URLs should be resolved to absolute
+            assert "https://developers.raycast.com/readme.md" in result
+            assert "https://developers.raycast.com/basics/getting-started.md" in result
+            # Original relative paths should NOT appear
+            assert "](/readme.md)" not in result
