@@ -48,6 +48,7 @@ jobs:
           path: dist/
 
   publish-pypi:
+    if: github.event.release.prerelease == false
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
@@ -64,6 +65,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
   publish-registry:
+    if: github.event.release.prerelease == false
     needs: publish-pypi
     runs-on: ubuntu-latest
     permissions:
