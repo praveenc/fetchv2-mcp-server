@@ -17,9 +17,8 @@ from typing import Annotated
 from urllib.parse import urlparse, urlunparse
 
 import httpx
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.exceptions import McpError
-from mcp.types import INTERNAL_ERROR, INVALID_PARAMS, ErrorData
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from protego import Protego
 from pydantic import AnyUrl, BaseModel, Field
 from trafilatura import extract
@@ -93,7 +92,7 @@ async def check_robots_txt(
 ) -> None:
     """
     Check if the URL can be fetched according to robots.txt.
-    Raises McpError if fetching is explicitly not allowed.
+    Raises ToolError if fetching is explicitly not allowed.
     If robots.txt is unavailable or times out, we allow fetching.
     """
     robots_url = get_robots_txt_url(url)
@@ -116,15 +115,10 @@ async def check_robots_txt(
 
     # If robots.txt returns 4xx client error (except 401/403), assume allowed
     if response.status_code in (401, 403):
-        raise McpError(
-            ErrorData(
-                code=INTERNAL_ERROR,
-                message=(
-                    f"robots.txt at {robots_url} returned {response.status_code}. "
-                    "Autonomous fetching may not be allowed. "
-                    "Try using the fetch_manual prompt instead."
-                ),
-            ),
+        raise ToolError(
+            f"robots.txt at {robots_url} returned {response.status_code}. "
+            "Autonomous fetching may not be allowed. "
+            "Try using the fetch_manual prompt instead."
         )
     if 400 <= response.status_code < 500:
         return  # No robots.txt, assume allowed
@@ -137,16 +131,11 @@ async def check_robots_txt(
     robot_parser = Protego.parse(processed)
 
     if not robot_parser.can_fetch(url, user_agent):
-        raise McpError(
-            ErrorData(
-                code=INTERNAL_ERROR,
-                message=(
-                    f"robots.txt at {robots_url} disallows fetching this URL.\n"
-                    f"User-Agent: {user_agent}\n"
-                    f"URL: {url}\n"
-                    "The user can try manually fetching using the fetch_manual prompt."
-                ),
-            ),
+        raise ToolError(
+            f"robots.txt at {robots_url} disallows fetching this URL.\n"
+            f"User-Agent: {user_agent}\n"
+            f"URL: {url}\n"
+            "The user can try manually fetching using the fetch_manual prompt."
         )
 
 
@@ -182,28 +171,17 @@ async def fetch_and_extract(
             )
             response.raise_for_status()
         except httpx.TimeoutException:
-            raise McpError(
-                ErrorData(code=INTERNAL_ERROR, message=f"Timeout fetching {url}"),
-            )
+            raise ToolError(f"Timeout fetching {url}")
         except httpx.HTTPStatusError as e:
-            raise McpError(
-                ErrorData(
-                    code=INTERNAL_ERROR,
-                    message=f"HTTP {e.response.status_code} fetching {url}",
-                ),
-            )
+            raise ToolError(f"HTTP {e.response.status_code} fetching {url}")
         except httpx.HTTPError as e:
-            raise McpError(
-                ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url}: {e!r}"),
-            )
+            raise ToolError(f"Failed to fetch {url}: {e!r}")
 
         page_content = response.text
         content_type = response.headers.get("content-type", "")
 
     if not page_content:
-        raise McpError(
-            ErrorData(code=INTERNAL_ERROR, message=f"Empty response from {url}"),
-        )
+        raise ToolError(f"Empty response from {url}")
 
     # Check if URL serves raw markdown - return directly
     if is_markdown_url(url):
@@ -237,8 +215,8 @@ async def fetch_and_extract(
     return extracted, "markdown (extracted)"
 
 
-# Initialize FastMCP server
-mcp = FastMCP(
+# Initialize MCPServer
+mcp = MCPServer(
     "fetchv2-mcp-server",
     dependencies=["httpx", "trafilatura", "protego", "defusedxml"],
 )
@@ -396,7 +374,7 @@ async def fetch(
     - fetch(url="https://example.com/data", include_tables=True) → Preserve tabular data
     """
     if not url:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="URL is required"))
+        raise ToolError("URL is required")
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
@@ -500,25 +478,15 @@ async def fetch_batch(
     - Robots.txt is NOT checked for batch fetches (assumes prior discovery)
     """
     if not urls:
-        raise McpError(
-            ErrorData(
-                code=INVALID_PARAMS,
-                message=(
-                    "urls list is empty. Provide 1-10 URLs. "
-                    "Example: urls=['https://example.com/page1']"
-                ),
-            )
+        raise ToolError(
+            "urls list is empty. Provide 1-10 URLs. "
+            "Example: urls=['https://example.com/page1']"
         )
 
     if len(urls) > 10:
-        raise McpError(
-            ErrorData(
-                code=INVALID_PARAMS,
-                message=(
-                    f"Too many URLs ({len(urls)}). Maximum 10 per request. "
-                    "Split into multiple fetch_batch calls."
-                ),
-            ),
+        raise ToolError(
+            f"Too many URLs ({len(urls)}). Maximum 10 per request. "
+            "Split into multiple fetch_batch calls."
         )
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
@@ -538,8 +506,8 @@ async def fetch_batch(
                 truncated += f"\n<!-- Truncated: {omitted} chars omitted -->"
 
             results.append(f"## {url}\n<!-- Type: {content_type} -->\n\n{truncated}")
-        except McpError as e:
-            results.append(f"## {url}\n\n<error>{e.error.message}</error>")
+        except ToolError as e:
+            results.append(f"## {url}\n\n<error>{e}</error>")
         except Exception as e:
             results.append(f"## {url}\n\n<error>Unexpected error: {e!r}</error>")
 
@@ -590,7 +558,7 @@ async def discover_links(
     - JavaScript/mailto/anchor links are excluded
     """
     if not url:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="URL is required"))
+        raise ToolError("URL is required")
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
@@ -604,9 +572,7 @@ async def discover_links(
             )
             response.raise_for_status()
         except httpx.HTTPError as e:
-            raise McpError(
-                ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url}: {e!r}"),
-            )
+            raise ToolError(f"Failed to fetch {url}: {e!r}")
 
     # Extract links using regex (simple but effective)
     html = response.text
@@ -748,7 +714,7 @@ async def fetch_llms_txt(
     - fetch_llms_txt(url="https://example.com/llms.txt", include_content=True)
     """
     if not url:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="URL is required"))
+        raise ToolError("URL is required")
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
@@ -762,23 +728,13 @@ async def fetch_llms_txt(
             )
             response.raise_for_status()
         except httpx.HTTPError as e:
-            raise McpError(
-                ErrorData(
-                    code=INTERNAL_ERROR,
-                    message=f"Failed to fetch llms.txt from {url}: {e!r}",
-                ),
-            )
+            raise ToolError(f"Failed to fetch llms.txt from {url}: {e!r}")
 
         # Parse the llms.txt content
         try:
             parsed = parse_llms_txt(response.text)
         except Exception as e:
-            raise McpError(
-                ErrorData(
-                    code=INTERNAL_ERROR,
-                    message=f"Failed to parse llms.txt: {e!r}",
-                ),
-            )
+            raise ToolError(f"Failed to parse llms.txt: {e!r}")
 
         # Build the response
         result_parts = [
