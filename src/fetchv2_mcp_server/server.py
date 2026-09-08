@@ -13,6 +13,7 @@ import itertools
 import logging
 import re
 from copy import deepcopy
+from importlib.metadata import version
 from typing import Annotated
 from urllib.parse import urlparse, urlunparse
 
@@ -218,6 +219,7 @@ async def fetch_and_extract(
 # Initialize MCPServer
 mcp = MCPServer(
     "fetchv2-mcp-server",
+    version=version("fetchv2-mcp-server"),
     dependencies=["httpx", "trafilatura", "protego", "defusedxml"],
 )
 

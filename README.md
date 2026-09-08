@@ -1,5 +1,7 @@
 # FetchV2 MCP Server
 
+<!-- mcp-name: io.github.praveenc/fetchv2-mcp-server -->
+
 [![PyPI version](https://img.shields.io/pypi/v/fetchv2-mcp-server.svg)](https://pypi.org/project/fetchv2-mcp-server/)
 [![CI](https://github.com/praveenc/fetchv2-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/praveenc/fetchv2-mcp-server/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
