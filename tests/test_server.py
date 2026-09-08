@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from mcp.client import Client
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import TextContent
 
 from fetchv2_mcp_server.server import (
     check_robots_txt,
@@ -16,6 +19,7 @@ from fetchv2_mcp_server.server import (
     fetch_llms_txt,
     get_robots_txt_url,
     is_markdown_url,
+    mcp,
     parse_llms_txt,
 )
 
@@ -243,15 +247,12 @@ class TestFetchBatchTool:
     @pytest.mark.asyncio
     async def test_fetch_batch_handles_errors_gracefully(self):
         """Fetch batch should handle individual URL errors gracefully."""
-        from mcp.shared.exceptions import McpError
-        from mcp.types import INTERNAL_ERROR, ErrorData
-
         with patch(
             "fetchv2_mcp_server.server.fetch_and_extract", new_callable=AsyncMock
         ) as mock_extract:
             mock_extract.side_effect = [
                 ("Content from page 1", "markdown (extracted)"),
-                McpError(ErrorData(code=INTERNAL_ERROR, message="Failed to fetch")),
+                ToolError("Failed to fetch"),
             ]
 
             result = await fetch_batch(
@@ -261,6 +262,32 @@ class TestFetchBatchTool:
             assert "Content from page 1" in result
             assert "<error>" in result
             assert "Failed to fetch" in result
+
+
+class TestMCPServer:
+    """MCP v2 integration tests."""
+
+    @pytest.mark.asyncio
+    async def test_server_registration_and_tool_errors(self):
+        """Server should expose its API and return expected failures to the model."""
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+            prompts = await client.list_prompts()
+            result = await client.call_tool("fetch_batch", {"urls": []})
+
+        assert {tool.name for tool in tools.tools} == {
+            "discover_links",
+            "fetch",
+            "fetch_batch",
+            "fetch_llms_txt",
+        }
+        assert {prompt.name for prompt in prompts.prompts} == {
+            "fetch_manual",
+            "research_topic",
+        }
+        assert result.is_error is True
+        assert isinstance(result.content[0], TextContent)
+        assert "urls list is empty" in result.content[0].text
 
 
 class TestDiscoverLinksTool:
