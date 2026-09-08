@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.praveenc/fetchv2-mcp-server",
+  "title": "FetchV2",
+  "description": "Fetch and extract web pages, discover links, and read llms.txt documentation indexes.",
+  "version": "2.0.0",
+  "repository": {
+    "url": "https://github.com/praveenc/fetchv2-mcp-server",
+    "source": "github",
+    "id": "1110157389"
+  },
+  "websiteUrl": "https://github.com/praveenc/fetchv2-mcp-server",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "fetchv2-mcp-server",
+      "version": "2.0.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

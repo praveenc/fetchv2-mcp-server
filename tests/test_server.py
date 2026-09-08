@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -285,6 +286,10 @@ class TestMCPServer:
             "fetch_manual",
             "research_topic",
         }
+        assert tools.meta is not None
+        assert tools.meta["io.modelcontextprotocol/serverInfo"]["version"] == version(
+            "fetchv2-mcp-server"
+        )
         assert result.is_error is True
         assert isinstance(result.content[0], TextContent)
         assert "urls list is empty" in result.content[0].text
