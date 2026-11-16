@@ -192,6 +192,60 @@ This option can return a large response.
 
 The tool resolves relative URLs, such as `/docs/guide.md`, against the `llms.txt` URL.
 
+## Security
+
+FetchV2 fetches URLs that a model chooses.
+A web page can contain a prompt injection that asks the model to fetch an internal address.
+FetchV2 has these limits to reduce that risk.
+
+### Private network guard
+
+FetchV2 refuses a request when the host is, or resolves to, a non-public address:
+
+- Loopback: `127.0.0.0/8`, `::1`, and `localhost` names
+- Private: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and IPv6 unique local `fc00::/7`
+- Link-local: `169.254.0.0/16` (including the cloud metadata address `169.254.169.254`) and `fe80::/10`
+- Unspecified, multicast, shared (`100.64.0.0/10`), and reserved ranges
+- IPv4-mapped IPv6 addresses, such as `::ffff:127.0.0.1`
+
+The guard checks the first request and every redirect hop.
+It also applies to the `robots.txt` request and to the pages that `fetch_llms_txt` loads.
+
+To fetch local or private hosts on purpose, set this environment variable for the server:
+
+```json
+{
+  "mcpServers": {
+    "fetchv2": {
+      "command": "uvx",
+      "args": ["fetchv2-mcp-server@latest"],
+      "env": { "FETCHV2_ALLOW_PRIVATE_NETWORKS": "1" }
+    }
+  }
+}
+```
+
+The values `1`, `true`, and `yes` turn the guard off. The guard is on by default.
+
+### Response size limit
+
+FetchV2 reads at most 5 MB (5,242,880 bytes) of each response body.
+It refuses a response early when `Content-Length` is over the limit.
+It also counts bytes while it reads, and it stops at the limit.
+A cut body ends with a `<!-- Truncated: response body exceeded ... -->` comment.
+
+### Known limits
+
+- **DNS rebinding.** The guard resolves the host before the request, and then the HTTP client resolves it again to connect.
+  A hostile DNS server can return a public address the first time and a private address the second time.
+  The guard does not pin the connection to the checked address.
+  If this risk matters, run the server where it cannot reach internal services, for example behind an egress firewall.
+- **Proxies.** If you set `HTTP_PROXY` or `HTTPS_PROXY`, the proxy connects to the host. The proxy must apply its own rules.
+- **Untrusted content.** Fetched page text is untrusted input.
+  It can contain instructions written for the model.
+  Do not let fetched text approve other tool calls.
+  Be careful with `autoApprove` for this server.
+
 ## Prompts
 
 - `fetch_manual` creates a request to fetch and summarize one URL.
