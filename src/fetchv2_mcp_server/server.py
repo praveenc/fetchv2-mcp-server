@@ -8,10 +8,14 @@ content extraction capabilities.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
 import itertools
 import logging
+import os
 import re
+import socket
 from copy import deepcopy
 from importlib.metadata import version
 from typing import Annotated
@@ -46,6 +50,9 @@ MARKDOWN_URL_SUFFIXES = (".md", ".markdown", ".mdx")
 # Default extraction settings
 DEFAULT_MAX_LENGTH = 5000
 DEFAULT_TIMEOUT = 30
+
+# Set to 1, true or yes to allow requests to loopback, private and other non-public hosts
+ALLOW_PRIVATE_NETWORKS_ENV = "FETCHV2_ALLOW_PRIVATE_NETWORKS"
 
 
 def get_trafilatura_config():
@@ -84,6 +91,79 @@ def sanitize_for_filename(text: str) -> str:
 def generate_url_hash(url: str) -> str:
     """Generate a short hash for URL uniqueness."""
     return hashlib.md5(url.encode()).hexdigest()[:8]  # noqa: S324
+
+
+def private_networks_allowed() -> bool:
+    """Return True if the user opted in to fetching non-public hosts."""
+    value = os.environ.get(ALLOW_PRIVATE_NETWORKS_ENV, "")
+    return value.strip().lower() in ("1", "true", "yes")
+
+
+def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """
+    Return True for any address that is not public.
+
+    Covers loopback, private (RFC 1918, IPv6 ULA), link-local (incl. 169.254.169.254
+    cloud metadata), unspecified, multicast, shared (CGNAT) and reserved ranges.
+    IPv4-mapped IPv6 (::ffff:a.b.c.d) is checked as the embedded IPv4 address.
+    """
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return not ip.is_global or ip.is_multicast
+
+
+async def resolve_host(host: str, port: int) -> list[str]:
+    """Resolve a hostname to its IP addresses without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return [str(info[4][0]) for info in infos]
+
+
+async def guard_request(request: httpx.Request) -> None:
+    """
+    Refuse requests to loopback, private and other non-public hosts (SSRF guard).
+
+    This runs as an httpx request event hook, so httpx calls it for the first
+    request and again for every redirect hop.
+
+    Known limit: the check resolves the host, and then httpx resolves it again
+    to connect. A DNS rebinding server can return a public address to the
+    check and a private address to the connection. The connection is not pinned
+    to the checked IP: with TLS that needs an SNI override, and httpcore pools
+    connections by IP, so two hostnames on one CDN IP could share a TLS session.
+    Proxies configured through the environment also bypass a custom transport.
+    """
+    if private_networks_allowed():
+        return
+
+    host = request.url.host.lower().rstrip(".")
+    hint = f"Set {ALLOW_PRIVATE_NETWORKS_ENV}=1 to allow local and private networks."
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ToolError(f"Refusing to fetch {request.url}: {host} is a local host. {hint}")
+
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        port = request.url.port or (443 if request.url.scheme == "https" else 80)
+        try:
+            addresses = [ipaddress.ip_address(a) for a in await resolve_host(host, port)]
+        except (OSError, ValueError) as e:
+            raise ToolError(f"Refusing to fetch {request.url}: cannot resolve {host}: {e}")
+
+    if not addresses:
+        raise ToolError(f"Refusing to fetch {request.url}: {host} has no addresses")
+
+    for ip in addresses:
+        if is_blocked_ip(ip):
+            raise ToolError(
+                f"Refusing to fetch {request.url}: {host} resolves to non-public "
+                f"address {ip}. {hint}"
+            )
+
+
+def new_client(**kwargs) -> httpx.AsyncClient:
+    """Create an httpx client that applies the SSRF guard to every request and redirect."""
+    return httpx.AsyncClient(event_hooks={"request": [guard_request]}, **kwargs)
 
 
 async def check_robots_txt(
@@ -158,7 +238,7 @@ async def fetch_and_extract(
         Tuple of (content, content_type_info)
 
     """
-    async with httpx.AsyncClient() as client:
+    async with new_client() as client:
         try:
             response = await client.get(
                 url,
@@ -382,7 +462,7 @@ async def fetch(
 
     # Check robots.txt unless ignored
     if not bypass_robots_txt:
-        async with httpx.AsyncClient() as client:
+        async with new_client() as client:
             await check_robots_txt(url, user_agent, client)
 
     # Fetch and extract content
@@ -564,7 +644,7 @@ async def discover_links(
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
-    async with httpx.AsyncClient() as client:
+    async with new_client() as client:
         try:
             response = await client.get(
                 url,
@@ -720,7 +800,7 @@ async def fetch_llms_txt(
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+    async with new_client(timeout=DEFAULT_TIMEOUT) as client:
         # Fetch the llms.txt file
         try:
             response = await client.get(
