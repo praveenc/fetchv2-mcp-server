@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Refuse requests to loopback, private, link-local (including cloud metadata), unspecified, multicast, shared, and reserved addresses, for IPv4 and IPv6. The check runs on every redirect hop and on the `robots.txt` request.
+- Add the `FETCHV2_ALLOW_PRIVATE_NETWORKS=1` environment variable to allow local and private hosts. The guard is on by default.
+- Limit each response body to 5 MB. Refuse a larger `Content-Length` early, and cut a streamed body at the limit with a `Truncated` comment.
+
 ## [1.1.0] - 2025-12-05
 
 ### Added

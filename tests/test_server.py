@@ -60,61 +60,59 @@ class TestRobotsTxt:
     @pytest.mark.asyncio
     async def test_robots_txt_timeout_allows_fetch(self):
         """When robots.txt times out, fetching should be allowed."""
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.get.side_effect = httpx.TimeoutException("timeout")
 
-        # Should not raise - timeout means allow
-        await check_robots_txt("https://example.com/page", "TestBot", mock_client)
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.TimeoutException("timeout")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            # Should not raise - timeout means allow
+            await check_robots_txt("https://example.com/page", "TestBot", client)
 
     @pytest.mark.asyncio
     async def test_robots_txt_connection_error_allows_fetch(self):
         """When robots.txt connection fails, fetching should be allowed."""
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.get.side_effect = httpx.ConnectError("connection failed")
 
-        # Should not raise
-        await check_robots_txt("https://example.com/page", "TestBot", mock_client)
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection failed")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            # Should not raise
+            await check_robots_txt("https://example.com/page", "TestBot", client)
 
     @pytest.mark.asyncio
     async def test_robots_txt_404_allows_fetch(self):
         """When robots.txt returns 404, fetching should be allowed."""
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_response = AsyncMock()
-        mock_response.status_code = 404
-        mock_client.get.return_value = mock_response
+        transport = httpx.MockTransport(lambda request: httpx.Response(404))
 
-        # Should not raise - 404 means no robots.txt
-        await check_robots_txt("https://example.com/page", "TestBot", mock_client)
+        async with httpx.AsyncClient(transport=transport) as client:
+            # Should not raise - 404 means no robots.txt
+            await check_robots_txt("https://example.com/page", "TestBot", client)
 
 
 class TestFetchAndExtract:
     """Tests for content fetching and extraction."""
 
     @pytest.mark.asyncio
-    async def test_fetch_markdown_url_returns_raw(self):
+    async def test_fetch_markdown_url_returns_raw(self, mock_http):
         """Markdown URLs should return raw content without extraction."""
-        mock_response = AsyncMock()
-        mock_response.text = "# Hello World\n\nThis is markdown."
-        mock_response.headers = {"content-type": "text/plain"}
-        mock_response.raise_for_status = lambda: None
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
-            content, content_type = await fetch_and_extract(
-                "https://example.com/README.md",
-                "TestBot",
+        mock_http(
+            lambda request: httpx.Response(
+                200,
+                text="# Hello World\n\nThis is markdown.",
+                headers={"content-type": "text/plain"},
             )
+        )
 
-            assert content == "# Hello World\n\nThis is markdown."
-            assert content_type == "markdown (raw)"
+        content, content_type = await fetch_and_extract(
+            "https://example.com/README.md",
+            "TestBot",
+        )
+
+        assert content == "# Hello World\n\nThis is markdown."
+        assert content_type == "markdown (raw)"
 
     @pytest.mark.asyncio
-    async def test_fetch_html_extracts_content(self):
+    async def test_fetch_html_extracts_content(self, mock_http):
         """HTML content should be extracted via Trafilatura."""
         html_content = """
         <html>
@@ -129,51 +127,39 @@ class TestFetchAndExtract:
         </body>
         </html>
         """
-        mock_response = AsyncMock()
-        mock_response.text = html_content
-        mock_response.headers = {"content-type": "text/html"}
-        mock_response.raise_for_status = lambda: None
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
-            content, content_type = await fetch_and_extract(
-                "https://example.com/page",
-                "TestBot",
+        mock_http(
+            lambda request: httpx.Response(
+                200, text=html_content, headers={"content-type": "text/html"}
             )
+        )
 
-            assert content_type == "markdown (extracted)"
-            # Trafilatura should extract the main content
-            assert "Main Content" in content or "article content" in content
+        content, content_type = await fetch_and_extract(
+            "https://example.com/page",
+            "TestBot",
+        )
+
+        assert content_type == "markdown (extracted)"
+        # Trafilatura should extract the main content
+        assert "Main Content" in content or "article content" in content
 
     @pytest.mark.asyncio
-    async def test_fetch_raw_mode_skips_extraction(self):
+    async def test_fetch_raw_mode_skips_extraction(self, mock_http):
         """Raw mode should return content without extraction."""
         html_content = "<html><body><p>Raw HTML</p></body></html>"
-        mock_response = AsyncMock()
-        mock_response.text = html_content
-        mock_response.headers = {"content-type": "text/html"}
-        mock_response.raise_for_status = lambda: None
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
-            content, content_type = await fetch_and_extract(
-                "https://example.com/page",
-                "TestBot",
-                raw=True,
+        mock_http(
+            lambda request: httpx.Response(
+                200, text=html_content, headers={"content-type": "text/html"}
             )
+        )
 
-            assert content == html_content
-            assert "raw" in content_type
+        content, content_type = await fetch_and_extract(
+            "https://example.com/page",
+            "TestBot",
+            raw=True,
+        )
+
+        assert content == html_content
+        assert "raw" in content_type
 
 
 class TestFetchTool:
@@ -299,7 +285,7 @@ class TestDiscoverLinksTool:
     """Tests for the discover_links tool."""
 
     @pytest.mark.asyncio
-    async def test_discover_links_finds_links(self):
+    async def test_discover_links_finds_links(self, mock_http):
         """Discover links should find all href links in HTML."""
         html_content = """
         <html>
@@ -310,26 +296,17 @@ class TestDiscoverLinksTool:
         </body>
         </html>
         """
-        mock_response = AsyncMock()
-        mock_response.text = html_content
-        mock_response.raise_for_status = lambda: None
+        mock_http(lambda request: httpx.Response(200, text=html_content))
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
+        result = await discover_links(url="https://example.com")
 
-            result = await discover_links(url="https://example.com")
-
-            assert "Found 3 links" in result
-            assert "https://example.com/page1" in result
-            assert "https://example.com/page2" in result
-            assert "https://external.com/page" in result
+        assert "Found 3 links" in result
+        assert "https://example.com/page1" in result
+        assert "https://example.com/page2" in result
+        assert "https://external.com/page" in result
 
     @pytest.mark.asyncio
-    async def test_discover_links_with_filter(self):
+    async def test_discover_links_with_filter(self, mock_http):
         """Discover links should filter by regex pattern."""
         html_content = """
         <html>
@@ -340,25 +317,14 @@ class TestDiscoverLinksTool:
         </body>
         </html>
         """
-        mock_response = AsyncMock()
-        mock_response.text = html_content
-        mock_response.raise_for_status = lambda: None
+        mock_http(lambda request: httpx.Response(200, text=html_content))
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
+        result = await discover_links(url="https://example.com", filter_pattern="/docs/")
 
-            result = await discover_links(
-                url="https://example.com", filter_pattern="/docs/"
-            )
-
-            assert "Found 2 links" in result
-            assert "/docs/intro" in result
-            assert "/docs/guide" in result
-            assert "/blog/" not in result
+        assert "Found 2 links" in result
+        assert "/docs/intro" in result
+        assert "/docs/guide" in result
+        assert "/blog/" not in result
 
 
 class TestParseLLMSTxt:
@@ -401,7 +367,7 @@ class TestFetchLLMSTxtTool:
     """Tests for the fetch_llms_txt tool."""
 
     @pytest.mark.asyncio
-    async def test_fetch_llms_txt_parses_structure(self):
+    async def test_fetch_llms_txt_parses_structure(self, mock_http):
         """Fetch llms.txt should parse and return structure."""
         llms_content = (
             "# Test Project\n\n"
@@ -410,27 +376,18 @@ class TestFetchLLMSTxtTool:
             "- [Guide](https://example.com/guide.md): The guide\n"
             "- [API](https://example.com/api.md): API reference\n"
         )
-        mock_response = AsyncMock()
-        mock_response.text = llms_content
-        mock_response.raise_for_status = lambda: None
+        mock_http(lambda request: httpx.Response(200, text=llms_content))
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
+        result = await fetch_llms_txt(url="https://example.com/llms.txt")
 
-            result = await fetch_llms_txt(url="https://example.com/llms.txt")
-
-            assert "# Test Project" in result
-            assert "Project description" in result
-            assert "## Documentation" in result
-            assert "[Guide](https://example.com/guide.md)" in result
-            assert "Found 2 documentation links" in result
+        assert "# Test Project" in result
+        assert "Project description" in result
+        assert "## Documentation" in result
+        assert "[Guide](https://example.com/guide.md)" in result
+        assert "Found 2 documentation links" in result
 
     @pytest.mark.asyncio
-    async def test_fetch_llms_txt_resolves_relative_urls(self):
+    async def test_fetch_llms_txt_resolves_relative_urls(self, mock_http):
         """Fetch llms.txt should resolve relative URLs to absolute URLs."""
         # Simulating Raycast-style llms.txt with relative paths
         llms_content = (
@@ -439,21 +396,12 @@ class TestFetchLLMSTxtTool:
             "- [Introduction](/readme.md): Start building\n"
             "- [Getting Started](/basics/getting-started.md): Prerequisites\n"
         )
-        mock_response = AsyncMock()
-        mock_response.text = llms_content
-        mock_response.raise_for_status = lambda: None
+        mock_http(lambda request: httpx.Response(200, text=llms_content))
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
+        result = await fetch_llms_txt(url="https://developers.raycast.com/llms.txt")
 
-            result = await fetch_llms_txt(url="https://developers.raycast.com/llms.txt")
-
-            # Relative URLs should be resolved to absolute
-            assert "https://developers.raycast.com/readme.md" in result
-            assert "https://developers.raycast.com/basics/getting-started.md" in result
-            # Original relative paths should NOT appear
-            assert "](/readme.md)" not in result
+        # Relative URLs should be resolved to absolute
+        assert "https://developers.raycast.com/readme.md" in result
+        assert "https://developers.raycast.com/basics/getting-started.md" in result
+        # Original relative paths should NOT appear
+        assert "](/readme.md)" not in result

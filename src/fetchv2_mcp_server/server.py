@@ -8,10 +8,14 @@ content extraction capabilities.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
 import itertools
 import logging
+import os
 import re
+import socket
 from copy import deepcopy
 from importlib.metadata import version
 from typing import Annotated
@@ -46,6 +50,12 @@ MARKDOWN_URL_SUFFIXES = (".md", ".markdown", ".mdx")
 # Default extraction settings
 DEFAULT_MAX_LENGTH = 5000
 DEFAULT_TIMEOUT = 30
+
+# Maximum response body size in bytes; longer bodies are cut while streaming
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+# Set to 1, true or yes to allow requests to loopback, private and other non-public hosts
+ALLOW_PRIVATE_NETWORKS_ENV = "FETCHV2_ALLOW_PRIVATE_NETWORKS"
 
 
 def get_trafilatura_config():
@@ -86,6 +96,130 @@ def generate_url_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:8]  # noqa: S324
 
 
+def private_networks_allowed() -> bool:
+    """Return True if the user opted in to fetching non-public hosts."""
+    value = os.environ.get(ALLOW_PRIVATE_NETWORKS_ENV, "")
+    return value.strip().lower() in ("1", "true", "yes")
+
+
+def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """
+    Return True for any address that is not public.
+
+    Covers loopback, private (RFC 1918, IPv6 ULA), link-local (incl. 169.254.169.254
+    cloud metadata), unspecified, multicast, shared (CGNAT) and reserved ranges.
+    IPv4-mapped IPv6 (::ffff:a.b.c.d) is checked as the embedded IPv4 address.
+    """
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return not ip.is_global or ip.is_multicast
+
+
+async def resolve_host(host: str, port: int) -> list[str]:
+    """Resolve a hostname to its IP addresses without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return [str(info[4][0]) for info in infos]
+
+
+async def guard_request(request: httpx.Request) -> None:
+    """
+    Refuse requests to loopback, private and other non-public hosts (SSRF guard).
+
+    This runs as an httpx request event hook, so httpx calls it for the first
+    request and again for every redirect hop.
+
+    Known limit: the check resolves the host, and then httpx resolves it again
+    to connect. A DNS rebinding server can return a public address to the
+    check and a private address to the connection. The connection is not pinned
+    to the checked IP: with TLS that needs an SNI override, and httpcore pools
+    connections by IP, so two hostnames on one CDN IP could share a TLS session.
+    Proxies configured through the environment also bypass a custom transport.
+    """
+    if private_networks_allowed():
+        return
+
+    host = request.url.host.lower().rstrip(".")
+    hint = f"Set {ALLOW_PRIVATE_NETWORKS_ENV}=1 to allow local and private networks."
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ToolError(f"Refusing to fetch {request.url}: {host} is a local host. {hint}")
+
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        port = request.url.port or (443 if request.url.scheme == "https" else 80)
+        try:
+            addresses = [ipaddress.ip_address(a) for a in await resolve_host(host, port)]
+        except (OSError, ValueError) as e:
+            raise ToolError(f"Refusing to fetch {request.url}: cannot resolve {host}: {e}")
+
+    if not addresses:
+        raise ToolError(f"Refusing to fetch {request.url}: {host} has no addresses")
+
+    for ip in addresses:
+        if is_blocked_ip(ip):
+            raise ToolError(
+                f"Refusing to fetch {request.url}: {host} resolves to non-public "
+                f"address {ip}. {hint}"
+            )
+
+
+def new_client(**kwargs) -> httpx.AsyncClient:
+    """Create an httpx client that applies the SSRF guard to every request and redirect."""
+    return httpx.AsyncClient(event_hooks={"request": [guard_request]}, **kwargs)
+
+
+def body_truncated_note() -> str:
+    """Return the marker appended to content cut at MAX_RESPONSE_BYTES."""
+    return (
+        f"\n<!-- Truncated: response body exceeded {MAX_RESPONSE_BYTES} bytes. "
+        "The rest was not downloaded. -->"
+    )
+
+
+async def get_capped(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: float,
+) -> tuple[httpx.Response, str, bool]:
+    """
+    GET a URL (following redirects) and read at most MAX_RESPONSE_BYTES of the body.
+
+    Refuses early when Content-Length is over the cap, and also counts decoded
+    bytes while streaming, because Content-Length can be absent or wrong.
+
+    Returns:
+        Tuple of (response, body text, truncated flag)
+
+    """
+    max_bytes = MAX_RESPONSE_BYTES
+    async with client.stream(
+        "GET", url, follow_redirects=True, headers=headers, timeout=timeout
+    ) as response:
+        content_length = response.headers.get("content-length", "")
+        if content_length.isdigit() and int(content_length) > max_bytes:
+            raise ToolError(
+                f"Response from {url} is {content_length} bytes, "
+                f"over the {max_bytes} byte limit"
+            )
+
+        chunks: list[bytes] = []
+        size = 0
+        truncated = False
+        async for chunk in response.aiter_bytes():
+            if size + len(chunk) > max_bytes:
+                chunks.append(chunk[: max_bytes - size])
+                truncated = True
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+
+    text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+    return response, text, truncated
+
+
 async def check_robots_txt(
     url: str,
     user_agent: str,
@@ -99,9 +233,9 @@ async def check_robots_txt(
     robots_url = get_robots_txt_url(url)
 
     try:
-        response = await client.get(
+        response, robot_txt, _ = await get_capped(
+            client,
             robots_url,
-            follow_redirects=True,
             headers={"User-Agent": user_agent},
             timeout=5.0,  # Short timeout for robots.txt
         )
@@ -125,7 +259,6 @@ async def check_robots_txt(
         return  # No robots.txt, assume allowed
 
     # Parse robots.txt
-    robot_txt = response.text
     processed = "\n".join(
         line for line in robot_txt.splitlines() if not line.strip().startswith("#")
     )
@@ -158,11 +291,11 @@ async def fetch_and_extract(
         Tuple of (content, content_type_info)
 
     """
-    async with httpx.AsyncClient() as client:
+    async with new_client() as client:
         try:
-            response = await client.get(
+            response, page_content, body_truncated = await get_capped(
+                client,
                 url,
-                follow_redirects=True,
                 headers={
                     "User-Agent": user_agent,
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -178,21 +311,22 @@ async def fetch_and_extract(
         except httpx.HTTPError as e:
             raise ToolError(f"Failed to fetch {url}: {e!r}")
 
-        page_content = response.text
         content_type = response.headers.get("content-type", "")
 
     if not page_content:
         raise ToolError(f"Empty response from {url}")
 
+    note = body_truncated_note() if body_truncated else ""
+
     # Check if URL serves raw markdown - return directly
     if is_markdown_url(url):
-        return page_content, "markdown (raw)"
+        return page_content + note, "markdown (raw)"
 
     # Check if content is HTML
     is_html = "<html" in page_content[:500].lower() or "text/html" in content_type
 
     if raw or not is_html:
-        return page_content, f"raw ({content_type or 'unknown'})"
+        return page_content + note, f"raw ({content_type or 'unknown'})"
 
     # Use Trafilatura for HTML content extraction
     extracted = extract(
@@ -209,11 +343,11 @@ async def fetch_and_extract(
     if not extracted:
         # Fallback: return raw content with a note
         return (
-            f"<!-- Extraction failed, returning raw HTML -->\n{page_content}",
+            f"<!-- Extraction failed, returning raw HTML -->\n{page_content}{note}",
             "html (extraction failed)",
         )
 
-    return extracted, "markdown (extracted)"
+    return extracted + note, "markdown (extracted)"
 
 
 # Initialize MCPServer
@@ -382,7 +516,7 @@ async def fetch(
 
     # Check robots.txt unless ignored
     if not bypass_robots_txt:
-        async with httpx.AsyncClient() as client:
+        async with new_client() as client:
             await check_robots_txt(url, user_agent, client)
 
     # Fetch and extract content
@@ -564,11 +698,11 @@ async def discover_links(
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
-    async with httpx.AsyncClient() as client:
+    async with new_client() as client:
         try:
-            response = await client.get(
+            response, html, body_truncated = await get_capped(
+                client,
                 url,
-                follow_redirects=True,
                 headers={"User-Agent": user_agent},
                 timeout=DEFAULT_TIMEOUT,
             )
@@ -577,7 +711,6 @@ async def discover_links(
             raise ToolError(f"Failed to fetch {url}: {e!r}")
 
     # Extract links using regex (simple but effective)
-    html = response.text
     link_pattern = r'href=["\']([^"\']+)["\']'
     matches = re.findall(link_pattern, html, re.IGNORECASE)
 
@@ -614,6 +747,9 @@ async def discover_links(
 
     if len(resolved_links) > 100:
         result.append(f"\n<!-- {len(resolved_links) - 100} more links omitted -->")
+
+    if body_truncated:
+        result.append(body_truncated_note())
 
     return "\n".join(result)
 
@@ -720,13 +856,14 @@ async def fetch_llms_txt(
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+    async with new_client(timeout=DEFAULT_TIMEOUT) as client:
         # Fetch the llms.txt file
         try:
-            response = await client.get(
+            response, llms_txt, body_truncated = await get_capped(
+                client,
                 url,
-                follow_redirects=True,
                 headers={"User-Agent": user_agent},
+                timeout=DEFAULT_TIMEOUT,
             )
             response.raise_for_status()
         except httpx.HTTPError as e:
@@ -734,7 +871,7 @@ async def fetch_llms_txt(
 
         # Parse the llms.txt content
         try:
-            parsed = parse_llms_txt(response.text)
+            parsed = parse_llms_txt(llms_txt)
         except Exception as e:
             raise ToolError(f"Failed to parse llms.txt: {e!r}")
 
@@ -791,6 +928,8 @@ async def fetch_llms_txt(
             result_parts.append("")
 
         result_parts.append(f"---\nFound {len(all_urls)} documentation links.")
+        if body_truncated:
+            result_parts.append(body_truncated_note())
 
         # Optionally fetch all content
         if include_content and all_urls:
