@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-16
+
+### Changed
+
+- **Behavior change:** all tools now refuse private and local addresses by default. Set `FETCHV2_ALLOW_PRIVATE_NETWORKS=1` to restore the old behavior.
+- **Behavior change:** responses over 5 MB are truncated, or refused when `Content-Length` is over 5 MB.
+
 ### Security
 
 - Refuse requests to loopback, private, link-local (including cloud metadata), unspecified, multicast, shared, and reserved addresses, for IPv4 and IPv6. The check runs on every redirect hop and on the `robots.txt` request.
