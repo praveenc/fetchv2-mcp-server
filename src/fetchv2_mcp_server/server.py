@@ -213,8 +213,7 @@ async def get_capped(
         content_length = response.headers.get("content-length", "")
         if content_length.isdigit() and int(content_length) > max_bytes:
             raise ToolError(
-                f"Response from {url} is {content_length} bytes, "
-                f"over the {max_bytes} byte limit"
+                f"Response from {url} is {content_length} bytes, over the {max_bytes} byte limit"
             )
 
         chunks: list[bytes] = []
@@ -653,8 +652,7 @@ async def fetch_batch(
         int,
         Field(
             description=(
-                "Character limit per URL. Use 1000-1500 when fetching many pages. "
-                "Default 2000."
+                "Character limit per URL. Use 1000-1500 when fetching many pages. Default 2000."
             ),
             default=2000,
         ),
@@ -689,8 +687,7 @@ async def fetch_batch(
     """
     if not urls:
         raise ToolError(
-            "urls list is empty. Provide 1-10 URLs. "
-            "Example: urls=['https://example.com/page1']"
+            "urls list is empty. Provide 1-10 URLs. Example: urls=['https://example.com/page1']"
         )
 
     if len(urls) > 10:
@@ -728,9 +725,7 @@ async def fetch_batch(
 async def discover_links(
     url: Annotated[
         str,
-        Field(
-            description="The webpage URL to scan for links (e.g., a docs index or sitemap)"
-        ),
+        Field(description="The webpage URL to scan for links (e.g., a docs index or sitemap)"),
     ],
     filter_pattern: Annotated[
         str,
@@ -858,9 +853,7 @@ def parse_llms_txt(txt: str) -> dict:
     sects = {k: _parse_links(v) for k, v in dict(_chunked(rest, 2)).items()}
 
     # Parse header with optional summary (blockquote)
-    pat_with_summary = (
-        r"^#\s*(?P<title>.+?$)\n+" r"(?:^>\s*(?P<summary>.+?$)\n+)?" r"(?P<info>.*)"
-    )
+    pat_with_summary = r"^#\s*(?P<title>.+?$)\n+" r"(?:^>\s*(?P<summary>.+?$)\n+)?" r"(?P<info>.*)"
     match = re.search(pat_with_summary, start.strip(), re.MULTILINE | re.DOTALL)
 
     if match:
@@ -922,9 +915,7 @@ async def confirm_llms_txt_content(
 async def fetch_llms_txt(
     url: Annotated[
         str,
-        Field(
-            description="URL to an llms.txt file (e.g., https://example.com/llms.txt)"
-        ),
+        Field(description="URL to an llms.txt file (e.g., https://example.com/llms.txt)"),
     ],
     include_content: Annotated[
         bool,
@@ -1057,9 +1048,7 @@ async def fetch_llms_txt(
                         truncated += f"\n<!-- Truncated: {omitted} chars omitted -->"
 
                     result_parts.append(f"## {title}")
-                    result_parts.append(
-                        f"<!-- Section: {section} | URL: {link_url} -->"
-                    )
+                    result_parts.append(f"<!-- Section: {section} | URL: {link_url} -->")
                     result_parts.append("")
                     result_parts.append(truncated)
                     result_parts.append("")
@@ -1067,9 +1056,7 @@ async def fetch_llms_txt(
                     result_parts.append("")
                 except Exception as e:
                     result_parts.append(f"## {title}")
-                    result_parts.append(
-                        f"<error>Failed to fetch {link_url}: {e!r}</error>"
-                    )
+                    result_parts.append(f"<error>Failed to fetch {link_url}: {e!r}</error>")
                     result_parts.append("")
 
     return "\n".join(result_parts)
