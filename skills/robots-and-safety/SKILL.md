@@ -26,9 +26,10 @@ description: Safe-use rules for the fetchv2 tools. Covers untrusted page text, r
 
 - On clients that can show a confirmation prompt, the server may ask the user before it fetches a page that robots.txt disallows.
   It may also ask before `fetch_llms_txt(include_content=True)` fetches more than 10 pages.
-- If the user declines, do not retry the same call.
-- If the client cannot show a prompt, the server may instead return a result that asks for explicit confirmation on the next call.
-  Ask the user, and repeat the call only after they agree.
+- If the user declines or cancels, the result says the page was not fetched.
+  Do not retry the same call.
+- If the client cannot show a prompt, `fetch` returns the usual robots.txt error.
+  Ask the user, and use `bypass_robots_txt=true` only after they agree.
 
 ## Private networks (SSRF)
 
