@@ -30,10 +30,7 @@ class TestUtilityFunctions:
 
     def test_get_robots_txt_url(self):
         """Test robots.txt URL generation."""
-        assert (
-            get_robots_txt_url("https://example.com/page")
-            == "https://example.com/robots.txt"
-        )
+        assert get_robots_txt_url("https://example.com/page") == "https://example.com/robots.txt"
         assert (
             get_robots_txt_url("https://example.com:8080/path")
             == "https://example.com:8080/robots.txt"
@@ -353,9 +350,7 @@ class TestParseLLMSTxt:
 
     def test_parse_llms_txt_no_summary(self):
         """Parse llms.txt without summary."""
-        content = (
-            "# Project Name\n\n" "## Docs\n\n" "- [Page](https://example.com/page.md)\n"
-        )
+        content = "# Project Name\n\n## Docs\n\n- [Page](https://example.com/page.md)\n"
         result = parse_llms_txt(content)
 
         assert result["title"] == "Project Name"
