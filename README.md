@@ -100,6 +100,51 @@ fetch_batch(
 )
 ```
 
+## Use as a Kiro Power
+
+This repository is also a Kiro Power.
+It bundles the MCP server (`mcp.json`) with four playbooks in `skills/` that teach the agent how to use the tools well.
+The manifest is `plugin.json`.
+
+### Install
+
+In a Kiro CLI v3 chat, run `/powers install <name|path>`.
+Outside a chat, run `kiro-cli powers install <name|path>`.
+The CLI takes a catalog name or a local directory, not a URL, so clone the repository first:
+
+```bash
+git clone https://github.com/praveenc/fetchv2-mcp-server.git
+kiro-cli powers install ./fetchv2-mcp-server
+```
+
+In the Kiro IDE, open the Powers panel and import the power from the GitHub repository URL.
+
+### Use it in a custom agent
+
+Set `includePowers: true` in a v3 agent config to include installed powers.
+This is a minimal `.kiro/agents/web-researcher.md`:
+
+```markdown
+---
+name: web-researcher
+description: Reads documentation from the web
+includePowers: true
+---
+
+You research questions by reading web pages and cite the URLs you used.
+```
+
+Start it with:
+
+```bash
+kiro-cli chat --v3 --agent web-researcher
+```
+
+### Skills over MCP
+
+The `skills/` folder uses the Agent Skills format, so the server can serve it through the `io.modelcontextprotocol/skills` extension (SEP-2640) once the Python SDK supports it.
+Python SDK 2.3.0 does not.
+
 ## Tool reference
 
 ### `fetch`
