@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "fetchv2",
+  "version": "2.1.0",
+  "description": "Fetch web pages as clean Markdown, discover links, and read llms.txt indexes, with SSRF and robots.txt safeguards.",
+  "author": {
+    "name": "Praveen Chamarthi",
+    "email": "1090396+praveenc@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/praveenc/fetchv2-mcp-server",
+  "repository": "https://github.com/praveenc/fetchv2-mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "fetch",
+    "web fetch",
+    "fetch url",
+    "web scraping",
+    "scrape",
+    "read documentation",
+    "llms.txt",
+    "markdown",
+    "html to markdown",
+    "crawl links",
+    "mcp"
+  ]
+}
