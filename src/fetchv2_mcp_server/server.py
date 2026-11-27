@@ -22,8 +22,17 @@ from typing import Annotated
 from urllib.parse import urlparse, urlunparse
 
 import httpx
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import (
+    AcceptedElicitation,
+    CancelledElicitation,
+    Context,
+    DeclinedElicitation,
+    Elicit,
+    MCPServer,
+    Resolve,
+)
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp_types.version import is_version_at_least
 from protego import Protego
 from pydantic import AnyUrl, BaseModel, Field
 from trafilatura import extract
@@ -53,6 +62,9 @@ DEFAULT_TIMEOUT = 30
 
 # Maximum response body size in bytes; longer bodies are cut while streaming
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+# fetch_llms_txt asks before fetching more linked pages than this
+LLMS_TXT_CONFIRM_LINKS = 10
 
 # Set to 1, true or yes to allow requests to loopback, private and other non-public hosts
 ALLOW_PRIVATE_NETWORKS_ENV = "FETCHV2_ALLOW_PRIVATE_NETWORKS"
@@ -220,6 +232,10 @@ async def get_capped(
     return response, text, truncated
 
 
+class RobotsTxtDisallowedError(ToolError):
+    """robots.txt disallows the URL (the only robots.txt refusal the user may override)."""
+
+
 async def check_robots_txt(
     url: str,
     user_agent: str,
@@ -265,7 +281,7 @@ async def check_robots_txt(
     robot_parser = Protego.parse(processed)
 
     if not robot_parser.can_fetch(url, user_agent):
-        raise ToolError(
+        raise RobotsTxtDisallowedError(
             f"robots.txt at {robots_url} disallows fetching this URL.\n"
             f"User-Agent: {user_agent}\n"
             f"URL: {url}\n"
@@ -356,6 +372,59 @@ mcp = MCPServer(
     version=version("fetchv2-mcp-server"),
     dependencies=["httpx", "trafilatura", "protego", "defusedxml"],
 )
+
+# First protocol revision that elicits through InputRequiredResult instead of a back-channel
+INPUT_REQUIRED_PROTOCOL_VERSION = "2026-07-28"
+
+
+def form_elicitation_supported(ctx: Context | None) -> bool:
+    """
+    Return True only if the client declared form elicitation and the SDK can deliver it.
+
+    Checked here because the SDK raises a protocol error (-32021) instead of falling back.
+    A bare `elicitation: {}` counts as form support; url-only does not.
+    """
+    if ctx is None or ctx.protocol_version is None:
+        return False
+    capabilities = ctx.client_capabilities
+    elicitation = capabilities.elicitation if capabilities is not None else None
+    if elicitation is None or (elicitation.form is None and elicitation.url is not None):
+        return False
+    if is_version_at_least(ctx.protocol_version, INPUT_REQUIRED_PROTOCOL_VERSION):
+        return True
+    return ctx.session.can_send_request
+
+
+class ConfirmForm(BaseModel):
+    """Empty form: accepting the elicitation is the confirmation."""
+
+
+# Spelled out because the SDK only injects the full outcome for a plain union of its members;
+# None is the default for direct (non-MCP) calls, where resolvers do not run
+Confirmation = AcceptedElicitation[ConfirmForm] | DeclinedElicitation | CancelledElicitation | None
+
+
+async def confirm_robots_txt(
+    url: str, bypass_robots_txt: bool, ctx: Context | None
+) -> Elicit[ConfirmForm] | None:
+    """
+    Run the robots.txt check for fetch, and ask the user when robots.txt disallows the URL.
+
+    Returns None when the fetch may go ahead. Raises the usual ToolError when the
+    client cannot be asked. Never prompts for the SSRF guard or robots.txt 401/403.
+    """
+    if not url or bypass_robots_txt:
+        return None
+    try:
+        async with new_client() as client:
+            await check_robots_txt(url, DEFAULT_USER_AGENT_AUTONOMOUS, client)
+    except RobotsTxtDisallowedError:
+        if not form_elicitation_supported(ctx):
+            raise
+        return Elicit(
+            f"robots.txt disallows fetching this URL. Fetch anyway?\nURL: {url}", ConfirmForm
+        )
+    return None
 
 
 class FetchParams(BaseModel):
@@ -488,6 +557,7 @@ async def fetch(
             default=False,
         ),
     ] = False,
+    robots_txt: Annotated[Confirmation, Resolve(confirm_robots_txt)] = None,
 ) -> str:
     """
     Fetch a single webpage and extract its main content as clean markdown.
@@ -514,10 +584,14 @@ async def fetch(
 
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
-    # Check robots.txt unless ignored
-    if not bypass_robots_txt:
-        async with new_client() as client:
-            await check_robots_txt(url, user_agent, client)
+    if robots_txt is None:  # called directly, not through MCP, so the resolver did not run
+        await confirm_robots_txt(url, bypass_robots_txt, None)
+    elif not isinstance(robots_txt, AcceptedElicitation):
+        return (
+            f"Not fetched: {url}\n"
+            "robots.txt disallows fetching this URL, and the user did not confirm "
+            f"fetching it anyway ({robots_txt.action})."
+        )
 
     # Fetch and extract content
     content, content_type = await fetch_and_extract(
@@ -806,6 +880,44 @@ def parse_llms_txt(txt: str) -> dict:
     return d
 
 
+async def get_llms_txt(client: httpx.AsyncClient, url: str) -> tuple[dict, bool]:
+    """Fetch and parse an llms.txt file. Returns (parsed, body truncated flag)."""
+    try:
+        response, llms_txt, body_truncated = await get_capped(
+            client,
+            url,
+            headers={"User-Agent": DEFAULT_USER_AGENT_AUTONOMOUS},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        raise ToolError(f"Failed to fetch llms.txt from {url}: {e!r}")
+
+    try:
+        return parse_llms_txt(llms_txt), body_truncated
+    except Exception as e:
+        raise ToolError(f"Failed to parse llms.txt: {e!r}")
+
+
+def count_llms_txt_links(parsed: dict) -> int:
+    """Count the links fetch_llms_txt would fetch with include_content=True."""
+    return sum(1 for links in parsed["sections"].values() for link in links if link.get("url"))
+
+
+async def confirm_llms_txt_content(
+    url: str, include_content: bool, ctx: Context | None
+) -> Elicit[ConfirmForm] | None:
+    """Ask before fetching every page of a large llms.txt index, if the client can be asked."""
+    if not url or not include_content or not form_elicitation_supported(ctx):
+        return None
+    async with new_client(timeout=DEFAULT_TIMEOUT) as client:
+        parsed, _ = await get_llms_txt(client, url)
+    count = count_llms_txt_links(parsed)
+    if count <= LLMS_TXT_CONFIRM_LINKS:
+        return None
+    return Elicit(f"This llms.txt lists {count} links. Fetch all {count} pages?", ConfirmForm)
+
+
 @mcp.tool()
 async def fetch_llms_txt(
     url: Annotated[
@@ -828,6 +940,7 @@ async def fetch_llms_txt(
             default=2000,
         ),
     ] = 2000,
+    content_confirmation: Annotated[Confirmation, Resolve(confirm_llms_txt_content)] = None,
 ) -> str:
     """
     Fetch and parse an llms.txt file to discover LLM-friendly documentation.
@@ -857,23 +970,7 @@ async def fetch_llms_txt(
     user_agent = DEFAULT_USER_AGENT_AUTONOMOUS
 
     async with new_client(timeout=DEFAULT_TIMEOUT) as client:
-        # Fetch the llms.txt file
-        try:
-            response, llms_txt, body_truncated = await get_capped(
-                client,
-                url,
-                headers={"User-Agent": user_agent},
-                timeout=DEFAULT_TIMEOUT,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise ToolError(f"Failed to fetch llms.txt from {url}: {e!r}")
-
-        # Parse the llms.txt content
-        try:
-            parsed = parse_llms_txt(llms_txt)
-        except Exception as e:
-            raise ToolError(f"Failed to parse llms.txt: {e!r}")
+        parsed, body_truncated = await get_llms_txt(client, url)
 
         # Build the response
         result_parts = [
@@ -930,6 +1027,15 @@ async def fetch_llms_txt(
         result_parts.append(f"---\nFound {len(all_urls)} documentation links.")
         if body_truncated:
             result_parts.append(body_truncated_note())
+
+        if content_confirmation is not None and not isinstance(
+            content_confirmation, AcceptedElicitation
+        ):
+            result_parts.append(
+                f"Linked pages were not fetched ({content_confirmation.action} by the user). "
+                "To read selected pages, pass up to 10 of the URLs above to fetch_batch."
+            )
+            include_content = False
 
         # Optionally fetch all content
         if include_content and all_urls:
