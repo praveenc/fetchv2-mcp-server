@@ -137,8 +137,17 @@ When `robots.txt` disallows the URL, the result depends on the MCP client:
 - If the client supports form elicitation, FetchV2 asks the user once whether to fetch the page anyway.
   If the user accepts, it fetches the page.
   If the user declines or cancels, it returns a normal result that says the page was not fetched.
-- If the client does not support elicitation, for example `kiro-cli chat --no-interactive`, the tool returns an error.
+- If the client does not support elicitation, the tool returns an error.
   The error suggests the `fetch_manual` prompt or `bypass_robots_txt=True` for a user-requested fetch.
+- Kiro CLI in headless mode (`kiro-cli chat --no-interactive`) supports elicitation but cancels every prompt.
+  The result says the page was not fetched.
+
+The private network guard runs before the `robots.txt` check and never asks the user.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/praveenc/fetchv2-mcp-server/main/docs/diagrams/fetch-confirmation-dark.svg">
+  <img src="https://raw.githubusercontent.com/praveenc/fetchv2-mcp-server/main/docs/diagrams/fetch-confirmation-light.svg" width="560" alt="Flowchart: fetch refuses a non-public address without a prompt. If robots.txt allows the URL, or bypass_robots_txt is true, it returns clean Markdown. Otherwise a client that can show a form asks the user. Accept fetches the page, and decline or cancel returns Not fetched. A client without forms gets the robots.txt error.">
+</picture>
 
 ### `fetch_batch`
 
@@ -292,6 +301,9 @@ Run lint and type checks:
 uv run ruff check .
 uv run pyright
 ```
+
+The flowchart in this README is `docs/diagrams/fetch-confirmation.mmd`, rendered with [Pele](https://pele.run) 1.10.0.
+After you edit the `.mmd` file, render it again to `fetch-confirmation-light.svg` and `fetch-confirmation-dark.svg` with the styles in `docs/diagrams/theme.css`, and commit all three files.
 
 ## Contributing
 

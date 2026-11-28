@@ -1,0 +1,3 @@
+.pele-node.ok > :first-child { fill: var(--pele-series-3); stroke: var(--pele-series-3); }
+.pele-node.ok .pele-label { fill: var(--pele-bg); }
+.pele-node.stop > :first-child { stroke: var(--pele-critical); stroke-width: 2px; }
