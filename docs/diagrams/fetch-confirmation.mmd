@@ -1,0 +1,14 @@
+%% Rebuild: node pele-build.mjs --css theme.css --scheme light <file>, then --scheme dark (pele 1.10.0)
+flowchart TB
+  accTitle: How fetch decides whether to fetch a page
+  accDescr: The private network guard checks every request first and never prompts. Then fetch checks robots.txt, unless bypass_robots_txt is true. If robots.txt disallows the URL and the client can show a form, the user is asked. Accept fetches the page. Decline or cancel returns Not fetched. A client without forms gets the robots.txt error.
+
+  start(["fetch(url)"]) --> guard{"Public<br>address?"}
+  guard -->|"no"| refuse["Refused<br>(no prompt)"]:::stop
+  guard -->|yes| robots{"robots.txt allows it,<br>or bypass_robots_txt?"}
+  robots -->|yes| md([Clean Markdown]):::ok
+  robots -->|"no"| form{"Client can<br>show a form?"}
+  form -->|"no"| err[robots.txt error]:::stop
+  form -->|yes| ask[/"Ask the user:<br>Fetch anyway?"/]
+  ask -->|accept| md
+  ask -->|decline or cancel| skip[Not fetched]:::stop
