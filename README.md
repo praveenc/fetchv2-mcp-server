@@ -140,6 +140,8 @@ Start it with:
 kiro-cli chat --v3 --agent web-researcher
 ```
 
+In headless mode (`--no-interactive`), Kiro CLI 3.6.2 allows power tools only with `--trust-all-tools`; `--trust-tools` does not match them.
+
 ### Skills over MCP
 
 The `skills/` folder uses the Agent Skills format, so the server can serve it through the `io.modelcontextprotocol/skills` extension (SEP-2640) once the Python SDK supports it.
